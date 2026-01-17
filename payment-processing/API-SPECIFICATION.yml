@@ -1,0 +1,671 @@
+openapi: 3.0.3
+info:
+  title: Payment Processing System API
+  description: |
+    Production-grade payment processing backend service integrating with Authorize.Net.
+    
+    ## Authentication
+    All endpoints (except `/auth/*` and `/webhooks/*`) require JWT authentication.
+    
+    ## Headers
+    - `Authorization`: Bearer token
+    - `X-Idempotency-Key`: Unique key for idempotent operations
+    - `X-Correlation-ID`: Request correlation ID for tracing
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development server
+  - url: https://api.example.com/api/v1
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: User authentication and token operations
+  - name: Payments
+    description: Payment transaction operations
+  - name: Subscriptions
+    description: Recurring billing subscription operations
+  - name: Webhooks
+    description: Payment gateway webhook handlers
+
+paths:
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Authenticate user
+      description: Login with credentials and receive JWT token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponseWrapper'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /payments/purchase:
+    post:
+      tags:
+        - Payments
+      summary: Process a purchase
+      description: Single-step authorization and capture
+      operationId: purchase
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        '201':
+          description: Purchase completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Duplicate request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /payments/authorize:
+    post:
+      tags:
+        - Payments
+      summary: Authorize a payment
+      description: Hold funds without capturing
+      operationId: authorize
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        '201':
+          description: Authorization successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+
+  /payments/capture:
+    post:
+      tags:
+        - Payments
+      summary: Capture an authorized payment
+      description: Settle funds from a previous authorization
+      operationId: capture
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureRequest'
+      responses:
+        '200':
+          description: Capture successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+        '404':
+          description: Transaction not found
+        '409':
+          description: Invalid transaction state
+
+  /payments/cancel:
+    post:
+      tags:
+        - Payments
+      summary: Cancel/void a transaction
+      description: Void an authorization before capture
+      operationId: cancel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      responses:
+        '200':
+          description: Transaction voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+
+  /payments/refund:
+    post:
+      tags:
+        - Payments
+      summary: Refund a transaction
+      description: Full or partial refund of a captured transaction
+      operationId: refund
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '200':
+          description: Refund processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+
+  /payments/{transactionId}:
+    get:
+      tags:
+        - Payments
+      summary: Get transaction by ID
+      operationId: getTransaction
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Transaction details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+        '404':
+          description: Transaction not found
+
+  /subscriptions/create:
+    post:
+      tags:
+        - Subscriptions
+      summary: Create a subscription
+      description: Set up recurring billing for a customer
+      operationId: createSubscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionRequest'
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponseWrapper'
+
+  /subscriptions/{subscriptionId}:
+    get:
+      tags:
+        - Subscriptions
+      summary: Get subscription by ID
+      operationId: getSubscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Subscription details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponseWrapper'
+    put:
+      tags:
+        - Subscriptions
+      summary: Update a subscription
+      operationId: updateSubscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionUpdateRequest'
+      responses:
+        '200':
+          description: Subscription updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponseWrapper'
+    delete:
+      tags:
+        - Subscriptions
+      summary: Cancel a subscription
+      operationId: cancelSubscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Subscription canceled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponseWrapper'
+
+  /webhooks/authorize-net:
+    post:
+      tags:
+        - Webhooks
+      summary: Handle Authorize.Net webhooks
+      description: Receive and process payment gateway webhooks
+      operationId: handleWebhook
+      parameters:
+        - name: X-ANET-Signature
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook accepted
+        '401':
+          description: Invalid signature
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      schema:
+        type: string
+      description: Unique key for idempotent operations
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      schema:
+        type: string
+      description: Request correlation ID for tracing
+
+  schemas:
+    AuthRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    AuthResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/AuthResponse'
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          default: Bearer
+        expiresIn:
+          type: integer
+          format: int64
+        userId:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+
+    PaymentRequest:
+      type: object
+      required:
+        - orderId
+        - customerId
+        - amount
+        - currency
+        - cardNumber
+        - expMonth
+        - expYear
+        - cvv
+      properties:
+        orderId:
+          type: string
+          maxLength: 100
+        customerId:
+          type: string
+          maxLength: 100
+        customerEmail:
+          type: string
+          format: email
+        amount:
+          type: number
+          format: decimal
+          minimum: 0.01
+        currency:
+          type: string
+          default: USD
+        cardNumber:
+          type: string
+          pattern: '^[0-9]{13,19}$'
+        expMonth:
+          type: string
+          pattern: '^(0[1-9]|1[0-2])$'
+        expYear:
+          type: string
+          pattern: '^[0-9]{4}$'
+        cvv:
+          type: string
+          pattern: '^[0-9]{3,4}$'
+        billingFirstName:
+          type: string
+        billingLastName:
+          type: string
+        billingAddress:
+          type: string
+        billingCity:
+          type: string
+        billingState:
+          type: string
+        billingZip:
+          type: string
+        billingCountry:
+          type: string
+          default: US
+        description:
+          type: string
+
+    CaptureRequest:
+      type: object
+      required:
+        - transactionId
+      properties:
+        transactionId:
+          type: string
+        amount:
+          type: number
+          format: decimal
+
+    CancelRequest:
+      type: object
+      required:
+        - transactionId
+      properties:
+        transactionId:
+          type: string
+        reason:
+          type: string
+
+    RefundRequest:
+      type: object
+      required:
+        - transactionId
+      properties:
+        transactionId:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        reason:
+          type: string
+        fullRefund:
+          type: boolean
+          default: false
+
+    SubscriptionRequest:
+      type: object
+      required:
+        - name
+        - customerId
+        - amount
+        - billingInterval
+        - cardNumber
+        - expMonth
+        - expYear
+        - cvv
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        customerId:
+          type: string
+        customerEmail:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+          default: USD
+        billingInterval:
+          type: string
+          enum: [DAILY, WEEKLY, MONTHLY, YEARLY]
+        intervalCount:
+          type: integer
+          default: 1
+        trialDays:
+          type: integer
+        startDate:
+          type: string
+          format: date
+        totalCycles:
+          type: integer
+        cardNumber:
+          type: string
+        expMonth:
+          type: string
+        expYear:
+          type: string
+        cvv:
+          type: string
+
+    SubscriptionUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        amount:
+          type: number
+        cardNumber:
+          type: string
+        expMonth:
+          type: string
+        expYear:
+          type: string
+
+    TransactionResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/TransactionResponse'
+
+    TransactionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+        customerId:
+          type: string
+        type:
+          type: string
+          enum: [PURCHASE, AUTHORIZE, CAPTURE, VOID, REFUND]
+        status:
+          type: string
+          enum: [PENDING, AUTHORIZED, CAPTURED, VOIDED, REFUNDED, PARTIALLY_REFUNDED, FAILED]
+        amount:
+          type: number
+        currency:
+          type: string
+        gatewayTransactionId:
+          type: string
+        cardLastFour:
+          type: string
+        cardBrand:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        canCapture:
+          type: boolean
+        canVoid:
+          type: boolean
+        canRefund:
+          type: boolean
+
+    SubscriptionResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/SubscriptionResponse'
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        customerId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, TRIAL, ACTIVE, SUSPENDED, CANCELED, EXPIRED]
+        amount:
+          type: number
+        billingInterval:
+          type: string
+        nextBillingDate:
+          type: string
+          format: date
+        gatewaySubscriptionId:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            fieldErrors:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+

@@ -1,0 +1,41 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+
+  datasource:
+    url: jdbc:h2:mem:payment_db;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: password
+    driver-class-name: org.h2.Driver
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+authorize-net:
+  sandbox: true
+  api-login-id: ${AUTHNET_API_LOGIN_ID:5KP3u95bQpv}
+  transaction-key: ${AUTHNET_TRANSACTION_KEY:346HZ32z3fP4hTG2}
+
+security:
+  jwt:
+    secret-key: local-development-secret-key-must-be-at-least-256-bits-long-for-hs256
+
+rate-limit:
+  enabled: false
+
+logging:
+  level:
+    com.payment: TRACE
+    org.springframework.security: DEBUG
+

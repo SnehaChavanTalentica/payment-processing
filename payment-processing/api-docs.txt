@@ -1,0 +1,625 @@
+openapi: 3.0.3
+info:
+  title: Payment Processing API
+  version: "0.1.0"
+  description: >
+    Authentication, payments (purchase/authorize/capture/refund/void),
+    subscriptions and Authorize\.Net webhook ingestion.
+servers:
+  - url: http://localhost:8080
+    description: Local
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Idempotency key to deduplicate requests
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Correlation id for tracing
+    AuthorizationHeader:
+      name: Authorization
+      in: header
+      required: true
+      schema:
+        type: string
+      description: 'Bearer JWT: "Bearer <token>"'
+    ANETSignature:
+      name: X-ANET-Signature
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Authorize\.Net webhook HMAC signature
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          nullable: true
+          description: Response payload
+          oneOf:
+            - type: object
+            - type: array
+            - type: boolean
+            - type: string
+            - type: integer
+    AuthRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+        expiresIn:
+          type: integer
+        userId:
+          type: string
+        username:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+    PaymentRequest:
+      type: object
+      required: [orderId, customerId, amountPaise, currency, opaqueToken]
+      properties:
+        orderId:
+          type: string
+        customerId:
+          type: string
+        amountPaise:
+          type: integer
+          description: Amount in minor units (paise)
+        currency:
+          type: string
+          example: INR
+        opaqueToken:
+          type: string
+          description: Tokenized payment data from Accept\.js
+        description:
+          type: string
+    CaptureRequest:
+      type: object
+      required: [transactionId, amountPaise]
+      properties:
+        transactionId:
+          type: string
+        amountPaise:
+          type: integer
+    CancelRequest:
+      type: object
+      required: [transactionId]
+      properties:
+        transactionId:
+          type: string
+    RefundRequest:
+      type: object
+      required: [transactionId, amountPaise]
+      properties:
+        transactionId:
+          type: string
+        amountPaise:
+          type: integer
+    TransactionResponse:
+      type: object
+      properties:
+        transactionId:
+          type: string
+        status:
+          type: string
+        amountPaise:
+          type: integer
+        currency:
+          type: string
+        orderId:
+          type: string
+        customerId:
+          type: string
+        gatewayTransactionId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    PageTransactionResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionResponse'
+        totalElements:
+          type: integer
+        totalPages:
+          type: integer
+        size:
+          type: integer
+        number:
+          type: integer
+    SubscriptionRequest:
+      type: object
+      required: [customerId, planId, amountPaise, currency, startDate]
+      properties:
+        customerId:
+          type: string
+        planId:
+          type: string
+        amountPaise:
+          type: integer
+        currency:
+          type: string
+        interval:
+          type: string
+          description: e\.g\. monthly or ISO-8601 interval
+        startDate:
+          type: string
+          format: date
+        metadata:
+          type: object
+          additionalProperties: true
+    SubscriptionUpdateRequest:
+      type: object
+      properties:
+        planId:
+          type: string
+        amountPaise:
+          type: integer
+        interval:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    SubscriptionResponse:
+      type: object
+      properties:
+        subscriptionId:
+          type: string
+        customerId:
+          type: string
+        planId:
+          type: string
+        status:
+          type: string
+        amountPaise:
+          type: integer
+        currency:
+          type: string
+        nextRunDate:
+          type: string
+          format: date
+    PageSubscriptionResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriptionResponse'
+        totalElements:
+          type: integer
+        totalPages:
+          type: integer
+        size:
+          type: integer
+        number:
+          type: integer
+
+tags:
+  - name: Authentication
+    description: Auth operations and token management
+  - name: Payments
+    description: Payment processing and transaction retrieval
+  - name: Subscriptions
+    description: Recurring billing and subscription management
+  - name: Webhooks
+    description: Webhook ingestion endpoints
+
+paths:
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Authenticate user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthRequest'
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /auth/validate:
+    post:
+      tags:
+        - Authentication
+      summary: Validate token
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        "200":
+          description: Token validity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/purchase:
+    post:
+      tags:
+        - Payments
+      summary: Process a purchase (auth + capture)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        "201":
+          description: Purchase created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/authorize:
+    post:
+      tags:
+        - Payments
+      summary: Authorize a payment (hold funds)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        "201":
+          description: Authorization created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/capture:
+    post:
+      tags:
+        - Payments
+      summary: Capture an authorized payment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureRequest'
+      responses:
+        "200":
+          description: Capture result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/cancel:
+    post:
+      tags:
+        - Payments
+      summary: Cancel/void a transaction
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      responses:
+        "200":
+          description: Void result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/refund:
+    post:
+      tags:
+        - Payments
+      summary: Refund a transaction
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        "200":
+          description: Refund result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/{transactionId}:
+    get:
+      tags:
+        - Payments
+      summary: Get transaction by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Transaction found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/customer/{customerId}:
+    get:
+      tags:
+        - Payments
+      summary: Get transactions by customer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: size
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paged transactions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /payments/order/{orderId}:
+    get:
+      tags:
+        - Payments
+      summary: Get transactions by order
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: size
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paged transactions by order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /subscriptions/create:
+    post:
+      tags:
+        - Subscriptions
+      summary: Create a subscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionRequest'
+      responses:
+        "201":
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /subscriptions/{subscriptionId}:
+    get:
+      tags:
+        - Subscriptions
+      summary: Get subscription by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Subscription retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+    put:
+      tags:
+        - Subscriptions
+      summary: Update a subscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionUpdateRequest'
+      responses:
+        "200":
+          description: Subscription updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+    delete:
+      tags:
+        - Subscriptions
+      summary: Cancel a subscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        "200":
+          description: Subscription canceled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /subscriptions/customer/{customerId}:
+    get:
+      tags:
+        - Subscriptions
+      summary: Get subscriptions by customer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: size
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paged subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+  /webhooks/authorize-net:
+    post:
+      tags:
+        - Webhooks
+      summary: Authorize\.Net webhook receiver
+      description: Public endpoint for Authorize\.Net to post events. Signature validation optional.
+      parameters:
+        - $ref: '#/components/parameters/ANETSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw webhook payload from Authorize\.Net
+      responses:
+        "200":
+          description: Accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        "401":
+          description: Invalid signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        "500":
+          description: Processing error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
