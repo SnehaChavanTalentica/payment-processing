@@ -194,7 +194,7 @@ try {
 
 - **GitHub Copilot**: Code completion, suggestions
 - **Copilot Chat**: Architecture discussions, debugging
-- **Code reviews**: Pattern validation
+- **Code reviews**: Pattern validation  
 
 ---
 
